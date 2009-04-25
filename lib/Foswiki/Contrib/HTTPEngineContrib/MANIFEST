@@ -1,0 +1,7 @@
+# Release manifest for HTTPEngineContrib
+data/System/HTTPEngineContrib.txt 0644 Documentation
+lib/Foswiki/Contrib/HTTPEngineContrib.pm 0644 Perl module
+lib/Foswiki/Engine/HTTP.pm 0644 Perl module
+lib/Foswiki/Engine/HTTP/CGI.pm 0644 Perl module
+lib/Foswiki/Engine/HTTP/Protocol.pm 0644 Perl module
+tools/foswiki_http.pl 0755 Perl script

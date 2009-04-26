@@ -79,7 +79,7 @@ sub options {
 sub default_values {
     my $this = shift;
     my $opts = $this->SUPER::default_values(@_);
-    $opts->{foswiki_read_headers_timeout} = 30;
+    $opts->{foswiki_read_headers_timeout} = 300;
     $opts->{foswiki_read_body_timeout}    = 300;
     $opts->{foswiki_limit_request_line}   = 8192;
     $opts->{foswiki_limit_headers}        = 8192;
@@ -210,6 +210,7 @@ sub readHeader {
 
     my $headers = HTTP::Headers->new();
     my ( $method, $uri, $proto );
+    my ( $header, $hdrval );
 
   READ:
     while ( $state ne 'done' && $bytes_read < $limit && $timeleft > 0 ) {
@@ -231,6 +232,10 @@ sub readHeader {
                 $data .= $1;
                 substr( $buffer, 0, $+[0], '' );
                 if ( $data =~ /^\s*$/s ) {
+                    $headers->push_header( $header => $hdrval )
+                      if defined $header
+                          && defined $hdrval
+                          && $state eq 'headers';
                     $state = 'done';
                     $this->{foswiki}{buffer} = $buffer;
                 }
@@ -247,8 +252,16 @@ sub readHeader {
                 $limit      = $this->{server}{foswiki_limit_headers};
                 $bytes_read = length($buffer);
             }
-            elsif ( $state eq 'headers' && $data =~ /^\s*([^\s:]+):\s(.*)/ ) {
-                $headers->push_header( $1 => $2 );
+            elsif ( $state eq 'headers' ) {
+                if ( $data =~ /^([^\s:]+)\s*:\s(.*)/ ) {
+                    my @tmp = ( $1, $2 );
+                    $headers->push_header( $header => $hdrval )
+                      if defined $header && defined $hdrval;
+                    ( $header, $hdrval ) = @tmp;
+                }
+                elsif ( $data =~ /^\s+(.*)/ ) {
+                    $hdrval .= $1;
+                }
             }
             $data = '';
         }

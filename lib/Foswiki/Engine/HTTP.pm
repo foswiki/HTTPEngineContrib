@@ -96,13 +96,16 @@ sub finalizeUploads {
 sub finalizeHeaders {
     my ( $this, $res, $req ) = @_;
 
-    $this->SUPER::finalizeHeaders($res, $req);
+    return if $this->{args}{proto} == 0.9;
+    $this->SUPER::finalizeHeaders( $res, $req );
     my $hdr = HTTP::Headers->new();
     foreach my $h ( $res->getHeader ) {
         $hdr->header( $h => [ $res->getHeader($h) ] );
     }
-    my $buffer =
-      $this->{args}{proto} . ' ' . ( $res->status || '200 OK' ) . $CRLF;
+    my $buffer = 'HTTP/'
+      . $this->{args}{proto} . ' '
+      . ( $res->status || '200 OK' )
+      . $CRLF;
     syswrite( $this->{client}, $buffer . $hdr->as_string($CRLF) . $CRLF );
 }
 

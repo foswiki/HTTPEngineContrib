@@ -18,6 +18,8 @@ use Error qw(:try);
 use Time::HiRes qw(time);
 use Errno qw(EINTR EWOULDBLOCK EAGAIN);
 
+my @sorted_actions = ();
+
 BEGIN {
     no warnings 'redefine';
     my $param_ref = \&HTTP::Body::param;
@@ -41,8 +43,16 @@ BEGIN {
         my $name = shift;
         return $this->{param}{$name};
     };
-    LWP::MediaTypes::read_media_types( $Foswiki::cfg{MimeTypesFileName} );
 }
+
+LWP::MediaTypes::read_media_types( $Foswiki::cfg{MimeTypesFileName} );
+$Foswiki::cfg{ScriptUrlPath} =~ s{/+$}{};
+@sorted_actions =
+  map { { action => $_, path => $Foswiki::cfg{ScriptUrlPaths}{$_} } } sort {
+    length( $Foswiki::cfg{ScriptUrlPaths}{$b} ) <=>
+      length( $Foswiki::cfg{ScriptUrlPaths}{$a} )
+  } keys %{ $Foswiki::cfg{ScriptUrlPaths} }
+  if exists $Foswiki::cfg{ScriptUrlPaths};
 
 sub options {
     my $this = shift;
@@ -57,7 +67,7 @@ sub options {
     $ref->{foswiki_engine_obj} = $prop->{foswiki_engine_obj};
 
     foreach (
-        qw(foswiki_read_timeout foswiki_limit_request_line
+        qw(foswiki_read_headers_timeout foswiki_limit_request_line
         foswiki_limit_headers foswiki_read_body_timeout)
       )
     {
@@ -69,10 +79,10 @@ sub options {
 sub default_values {
     my $this = shift;
     my $opts = $this->SUPER::default_values(@_);
-    $opts->{foswiki_read_timeout}       = 30;
-    $opts->{foswiki_read_body_timeout}  = 300;
-    $opts->{foswiki_limit_request_line} = 8192;
-    $opts->{foswiki_limit_headers}      = 8192;
+    $opts->{foswiki_read_headers_timeout} = 30;
+    $opts->{foswiki_read_body_timeout}    = 300;
+    $opts->{foswiki_limit_request_line}   = 8192;
+    $opts->{foswiki_limit_headers}        = 8192;
     return $opts;
 }
 
@@ -90,52 +100,27 @@ sub process_request {
 
     my ( $method, $uri, $proto, $headers );
 
-    $this->{foswiki}{timeleft} = $this->{server}{foswiki_read_timeout};
     try {
-        my $result =
-          $this->getRequestData( $this->{server}{foswiki_limit_request_line},
-            \&_getLineBreak );
-        ( $method, $uri, $proto ) =
-          $$result =~ /^\s*(?:(\w+)\s+(\S+)(?:\s+(\S+))?)?/;
+        ( $method, $uri, $proto, $headers ) = $this->readHeader();
     }
     catch Error::Simple with {
         my $e = shift;
-        if ( $e->text eq 'timeout' ) {
-            $this->log( 2, 'client <IP> timed out' );
-        }
-        elsif ( $e->text eq 'request line too long' ) {
-            $this->log( 4, 'client <IP> sent a request line too long' );
-        }
-        $this->returnError( $e->text );
-        return;    # Abort the connection
     };
 
     unless ( defined $method && $method =~ /(?:POST|GET|HEAD)/i ) {
-        $this->returnError( 501, 'Not Implemented' );
-        return;
-    }
-    unless ( !defined($proto) || $proto =~ m!HTTP/(?:1\.[01]|0\.9)!i ) {
-        $this->returnError( 505, 'HTTP Version Not Supported' );
+        $this->returnError(501);
         return;
     }
 
-    try {
-        my $result =
-          $this->getRequestData( $this->{server}{foswiki_limit_headers},
-            \&_getDoubleLineBreak )
-          if $proto && $proto =~ m!HTTP/1\.[01]!i;
-        $headers = HTTP::Message->parse($$result)->headers;
+    if ( !defined($proto) || $proto =~ m!HTTP/0.9!i ) {
+        $proto = 0.9;
     }
-    catch Error::Simple with {
-        my $e = shift;
-        if ( $e->text eq 'timeout' ) {
-            $this->log( 4, 'client <IP> timed out' );
-        }
-        elsif ( $e->text eq 'request headers too large' ) {
-            $this->log( 4, 'client <IP> sent headers too large' );
-        }
-        $this->returnError( $e->text );
-        return;    # Abort the connection
+    elsif ( $proto =~ m!HTTP/(1\.[01])!i ) {
+        $proto = $1;
+    }
+    else {
+        $this->returnError(505);
+        return;
     }
 
     # Check what resource was requested:
@@ -157,14 +142,13 @@ sub process_request {
     elsif ( index( $uri, $Foswiki::cfg{ScriptUrlPath} ) == 0 )
     {    # Foswiki action or CGI script
         my $path = $Foswiki::cfg{ScriptUrlPath};
-        $path =~ s{/+$}{};
 
         my ( $script, $path_info, $query_string ) =
           $uri     =~ m#^\Q$path\E/+([^/\?]+)([^\?]*)(?:\?(.*))?#;
         $path_info =~ s/%(..)/chr(hex($1))/ge;
 
         unless ( defined $script ) {
-            $this->returnError( 403, 'Forbidden' );
+            $this->returnError(403);
             return;    # Abort the connection
         }
 
@@ -195,11 +179,8 @@ sub process_request {
     }
     elsif ( exists $Foswiki::cfg{ScriptUrlPaths} )
     {    # Try shorter URLs before giving up
-        while ( my ( $action, $path ) =
-            each %{ $Foswiki::cfg{ScriptUrlPaths} } )
-        {
-            $path =~ s{/+$}{};
-            next unless $uri =~ m#^\Q$path\E(/[^\?]*)(?:\?(.*))?#;
+        foreach my $entry (@sorted_actions) {
+            next unless $uri =~ m#^\Q$entry->{path}\E(/[^\?]*)(?:\?(.*))?#;
             my ( $path_info, $query_string ) = ( $1, $2 );
             $path_info =~ s/%(..)/chr(hex($1))/ge;
             $this->handleFoswikiAction(
@@ -207,44 +188,34 @@ sub process_request {
                 uri_ref          => \$uri,
                 proto            => $proto,
                 headers          => $headers,
-                action           => $action,
+                action           => $entry->{action},
                 path_info_ref    => \$path_info,
                 query_string_ref => \$query_string,
             );
             $handled = 1;
-            keys %{ $Foswiki::cfg{ScriptUrlPaths} };    # reset iterator
             last;
         }
     }
-    $this->returnError( 404, 'Not Found' ) unless $handled;
+    $this->returnError(404) unless $handled;
 }
 
-sub getRequestData {
-    my ( $this, $limit, $sub ) = @_;
-    my $timeleft = $this->{foswiki}{timeleft};
-    my $sel      = IO::Select->new( $this->{server}{client} );
-    my $now      = time;
-    my $eof      = 0;
+sub readHeader {
+    my $this       = shift;
+    my $sel        = IO::Select->new( $this->{server}{client} );
+    my $timeleft   = $this->{server}{foswiki_read_headers_timeout};
+    my $limit      = $this->{server}{foswiki_limit_request_line};
+    my $bytes_read = 0;
+    my $data       = '';
+    my $state      = 'request';
 
-    $this->{foswiki}{buffer} ||= '';
-    my ( $pos, $p_len ) = $sub->( \$this->{foswiki}{buffer} );
-    my $result_str = '';
-    if ( $pos >= 0 && $pos + $p_len <= $limit ) {
-        $result_str = substr( $this->{foswiki}{buffer}, 0, $pos + $p_len, '' );
-        $eof = 1;
-    }
-    elsif ( $pos >= 0 ) {
-        throw Error::Simple('ESIZE');
-    }
-    else {
-        $result_str = substr( $this->{foswiki}{buffer}, 0, $limit, '' );
-    }
-    my $bytes_read = length($result_str);
+    my $headers = HTTP::Headers->new();
+    my ( $method, $uri, $proto );
 
-    while ( !$eof && $bytes_read < $limit && $timeleft > 0 ) {
+  READ:
+    while ( $state ne 'done' && $bytes_read < $limit && $timeleft > 0 ) {
+        my $now   = time;
         my @ready = $sel->can_read($timeleft);
         $timeleft -= time - $now;
-        $now = time;
         if ( @ready == 0 ) {
             next if $! == EINTR;
             throw Error::Simple("EBADF: $!");
@@ -254,48 +225,45 @@ sub getRequestData {
             next if $! == EINTR || $! == EAGAIN || $! == EWOULDBLOCK;
             throw Error::Simple("EBADF: $!");
         }
-        ( $pos, $p_len ) = $sub->( \$buffer );
-        if ( $pos >= 0 ) {
-            throw Error::Simple('ESIZE')
-              if ( $bytes_read + $pos + $p_len > $limit );
-            $result_str .= substr( $buffer, 0, $pos + $p_len, '' );
-            $this->{foswiki}{buffer} = $buffer;
-            $eof = 1;
-        }
-        else {
-            $result_str .= $buffer;
-        }
         $bytes_read += $rv;
+        while ( $state ne 'done' && length($buffer) > 0 ) {
+            if ( $buffer =~ /(.*?)(?:\x0D?\x0A|\x0D(?!\x0A))/s ) {
+                $data .= $1;
+                substr( $buffer, 0, $+[0], '' );
+                if ( $data =~ /^\s*$/s ) {
+                    $state = 'done';
+                    $this->{foswiki}{buffer} = $buffer;
+                }
+            }
+            else {
+                $data .= $buffer;
+                next READ;
+            }
+            if ( $state eq 'request' ) {
+                ( $method, $uri, $proto ) =
+                  $data =~ /^\s*(\S+)\s+(\S+)(?:\s+(\S+))?/;
+                $state = defined $proto
+                  && $proto =~ m!HTTP/1\.[01]!i ? 'headers' : 'done';
+                $limit      = $this->{server}{foswiki_limit_headers};
+                $bytes_read = length($buffer);
+            }
+            elsif ( $state eq 'headers' && $data =~ /^\s*([^\s:]+):\s(.*)/ ) {
+                $headers->push_header( $1 => $2 );
+            }
+            $data = '';
+        }
     }
-    if ($eof) {
+
+    if ( $state eq 'done' ) {
         $this->{foswiki}{timeleft} = $timeleft;
-        return \$result_str;
+        return ( $method, $uri, $proto, $headers );
     }
     elsif ( $timeleft <= 0 ) {
         throw Error::Simple('ETIMEOUT');
     }
-    elsif ( $bytes_read > $limit ) {
-        throw Error::Simple('ESIZE');
+    elsif ( $bytes_read >= $limit ) {
+        throw Error::Simple('ESIZELIMIT');
     }
-
-    # Should never get here
-    return ();
-}
-
-sub _getLineBreak {
-    my $buf_ref = shift;
-    if ( $$buf_ref =~ /(\x0D?\x0A|\x0D(?!\x0A))/ ) {
-        return ( $-[0], length($1) );
-    }
-    return ( -1, 0 );
-}
-
-sub _getDoubleLineBreak {
-    my $buf_ref = shift;
-    if ( $$buf_ref =~ /((?:\x0D?\x0A){2}|(?:\x0D\x0A?\x0D(?!\x0A)))/ ) {
-        return ( $-[0], length($1) );
-    }
-    return ( -1, 0 );
 }
 
 sub readBody {
@@ -310,12 +278,11 @@ sub readBody {
     my $timeleft =
       $this->{server}{foswiki_read_body_timeout} + $this->{foswiki}{timeleft};
     my $sel = IO::Select->new( $this->{server}{client} );
-    my $now = time;
 
     while ( $bytes_read < $headers->content_length && $timeleft >= 0 ) {
+        my $now   = time;
         my @ready = $sel->can_read($timeleft);
         $timeleft -= time - $now;
-        $now = time;
         if ( @ready == 0 ) {
             next if $! == EINTR;
             throw Error::Simple("EBADF: $!");

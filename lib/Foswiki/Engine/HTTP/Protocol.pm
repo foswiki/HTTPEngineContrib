@@ -4,13 +4,12 @@ use Net::Server::MultiType ();
 @ISA = qw(Net::Server::MultiType);
 
 use strict;
-use HTTP::Message              ();
-use HTTP::Body                 ();
-use HTTP::Status               ();
-use IO::Select                 ();
-use File::Spec                 ();
-use Foswiki::Engine::HTTP::CGI ();
-use LWP::MediaTypes qw(guess_media_type);
+use HTTP::Message                 ();
+use HTTP::Body                    ();
+use HTTP::Status                  ();
+use IO::Select                    ();
+use Foswiki::Engine::HTTP::CGI    ();
+use Foswiki::Engine::HTTP::Static ();
 
 use Assert;
 use Error qw(:try);
@@ -45,7 +44,6 @@ BEGIN {
     };
 }
 
-LWP::MediaTypes::read_media_types( $Foswiki::cfg{MimeTypesFileName} );
 $Foswiki::cfg{ScriptUrlPath} =~ s{/+$}{};
 @sorted_actions =
   map { { action => $_, path => $Foswiki::cfg{ScriptUrlPaths}{$_} } } sort {
@@ -322,30 +320,8 @@ sub returnError {
 
 sub handleStaticResponse {
     my $this = shift;
-    my %args = @_;      # method, uri_ref, proto, headers
-    substr( ${ $args{uri_ref} }, 0, length( $Foswiki::cfg{PubUrlPath} ), '' );
-    ${ $args{uri_ref} } =~ s/\?.*//;
-    my @path = File::Spec->no_upwards( split m!/+!, ${ $args{uri_ref} } );
-    my $file = File::Spec->catfile( $Foswiki::cfg{PubDir}, @path );
-    my $CRLF = "\x0D\x0A";
-    if ( -e $file && -r _ && !-d _ ) {
-        my ( $size, $mtime ) = ( stat(_) )[ 7, 9 ];
-        my $type     = guess_media_type($file);
-        my $response = 'HTTP/1.1 200 OK' . $CRLF;
-        $response .= 'Content-Type: ' . $type . $CRLF;
-        $response .= 'Content-Length: ' . $size . $CRLF . $CRLF;
-        syswrite( $this->{server}{client}, $response );
-        open my $fh, '<', $file;
-        binmode $fh;
-
-        while ( sysread( $fh, my $buffer, 4096 ) ) {
-            syswrite( $this->{server}{client}, $buffer );
-        }
-        close $fh;
-    }
-    else {
-        $this->returnError(404);
-    }
+    my $handler = Foswiki::Engine::HTTP::Static->new(@_);
+    $handler->send_response($this->{server}{client});
 }
 
 sub handleFoswikiAction {

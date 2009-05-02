@@ -77,8 +77,8 @@ sub options {
 sub default_values {
     my $this = shift;
     my $opts = $this->SUPER::default_values(@_);
-    $opts->{foswiki_read_headers_timeout} = 300;
-    $opts->{foswiki_read_body_timeout}    = 300;
+    $opts->{foswiki_read_headers_timeout} = 30;
+    $opts->{foswiki_read_body_timeout}    = 30 * 60;
     $opts->{foswiki_limit_request_line}   = 8192;
     $opts->{foswiki_limit_headers}        = 8192;
     return $opts;
@@ -345,8 +345,11 @@ sub handleFoswikiAction {
 
 sub handleCgiScript {
     my $this = shift;
+
     my %args = @_;      # method, uri_ref, proto, headers, script,
                         # path_info_ref, query_string_ref
+    my $handler = Foswiki::Engine::HTTP::CGI->new(@_);
+    $handler->send_response($this->{server}{client});
 }
 
 1;

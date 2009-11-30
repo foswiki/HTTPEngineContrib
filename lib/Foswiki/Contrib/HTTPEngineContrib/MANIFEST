@@ -3,6 +3,8 @@ data/System/HTTPEngineContrib.txt 0644 Documentation
 lib/Foswiki/Contrib/HTTPEngineContrib.pm 0644 Perl module
 lib/Foswiki/Engine/HTTP.pm 0644 Perl module
 lib/Foswiki/Engine/HTTP/CGI.pm 0644 Perl module
-lib/Foswiki/Engine/HTTP/Protocol.pm 0644 Perl module
+lib/Foswiki/Engine/HTTP/Native.pm 0644 Perl module
+lib/Foswiki/Engine/HTTP/Server.pm 0644 Perl module
 lib/Foswiki/Engine/HTTP/Static.pm 0644 Perl module
+lib/Foswiki/Engine/HTTP/Util.pm 0644 Perl module
 tools/foswiki_http.pl 0755 Perl script

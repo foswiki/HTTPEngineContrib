@@ -10,14 +10,13 @@ use HTTP::Status                  ();
 use IO::Select                    ();
 use Foswiki::Engine::HTTP::CGI    ();
 use Foswiki::Engine::HTTP::Static ();
+use Foswiki::Engine::HTTP::Native ();
 
 use Assert;
 use Error qw(:try);
 
 use Time::HiRes qw(time);
 use Errno qw(EINTR EWOULDBLOCK EAGAIN);
-
-my @sorted_actions = ();
 
 BEGIN {
     no warnings 'redefine';
@@ -44,14 +43,6 @@ BEGIN {
     };
 }
 
-$Foswiki::cfg{ScriptUrlPath} =~ s{/+$}{};
-@sorted_actions =
-  map { { action => $_, path => $Foswiki::cfg{ScriptUrlPaths}{$_} } } sort {
-    length( $Foswiki::cfg{ScriptUrlPaths}{$b} ) <=>
-      length( $Foswiki::cfg{ScriptUrlPaths}{$a} )
-  } keys %{ $Foswiki::cfg{ScriptUrlPaths} }
-  if exists $Foswiki::cfg{ScriptUrlPaths};
-
 sub options {
     my $this = shift;
     my $prop = $this->{'server'};
@@ -60,13 +51,10 @@ sub options {
     ### setup options in the parent classes
     $this->SUPER::options($ref);
 
-    ### add a single value option
-    $prop->{foswiki_engine_obj} ||= undef;
-    $ref->{foswiki_engine_obj} = $prop->{foswiki_engine_obj};
-
     foreach (
-        qw(foswiki_read_headers_timeout foswiki_limit_request_line
-        foswiki_limit_headers foswiki_read_body_timeout)
+        qw(read_headers_timeout limit_request_line
+        limit_headers read_body_timeout limit_body
+        puburl binurl bindir pubdir)
       )
     {
         $prop->{$_} ||= undef;
@@ -79,20 +67,13 @@ sub options {
 sub default_values {
     my $this = shift;
     my $opts = $this->SUPER::default_values(@_);
-    $opts->{foswiki_read_headers_timeout} = 30;
-    $opts->{foswiki_read_body_timeout}    = 30 * 60;
-    $opts->{foswiki_limit_request_line}   = 8192;
-    $opts->{foswiki_limit_headers}        = 8192;
+    $opts->{read_headers_timeout} = 30;
+    $opts->{read_body_timeout}    = 30 * 60;
+    $opts->{limit_request_line}   = 8192;
+    $opts->{limit_headers}        = 8192;
+    $opts->{limit_body}           = 10 * (2 ** 20);
+    $opts->{puburl}               = 
     return $opts;
-}
-
-sub post_configure_hook {
-    ASSERT(
-        Universal::isa(
-            $_[0]->{server}{foswiki_engine_obj},
-            'Foswiki::Engine::HTTP'
-        )
-    ) if DEBUG;
 }
 
 sub process_request {
@@ -130,7 +111,7 @@ sub process_request {
     # Give up if none of these.
     my $handled = 0;
 
-    if ( index( $uri, $Foswiki::cfg{PubUrlPath} ) == 0 ) {
+    if ( index( $uri, $this->{server}{puburlpath} ) == 0 ) {
         $this->handleStaticResponse(
             method  => $method,
             uri_ref => \$uri,
@@ -139,9 +120,9 @@ sub process_request {
         );
         $handled = 1;
     }
-    elsif ( index( $uri, $Foswiki::cfg{ScriptUrlPath} ) == 0 )
+    elsif ( index( $uri, $this->{server}{scripturlpath} ) == 0 )
     {    # Foswiki action or CGI script
-        my $path = $Foswiki::cfg{ScriptUrlPath};
+        my $path = $this->{server}{scripturlpath};
 
         my ( $script, $path_info, $query_string ) =
           $uri     =~ m#^\Q$path\E/+([^/\?]+)([^\?]*)(?:\?(.*))?#;
@@ -179,22 +160,22 @@ sub process_request {
     }
     elsif ( exists $Foswiki::cfg{ScriptUrlPaths} )
     {    # Try shorter URLs before giving up
-        foreach my $entry (@sorted_actions) {
-            next unless $uri =~ m#^\Q$entry->{path}\E(/[^\?]*)(?:\?(.*))?#;
-            my ( $path_info, $query_string ) = ( $1, $2 );
-            $path_info =~ s/%(..)/chr(hex($1))/ge;
-            $this->handleFoswikiAction(
-                method           => $method,
-                uri_ref          => \$uri,
-                proto            => $proto,
-                headers          => $headers,
-                action           => $entry->{action},
-                path_info_ref    => \$path_info,
-                query_string_ref => \$query_string,
-            );
-            $handled = 1;
-            last;
-        }
+       # foreach my $entry (@sorted_actions) {
+       #     next unless $uri =~ m#^\Q$entry->{path}\E(/[^\?]*)(?:\?(.*))?#;
+       #     my ( $path_info, $query_string ) = ( $1, $2 );
+       #     $path_info =~ s/%(..)/chr(hex($1))/ge;
+       #     $this->handleFoswikiAction(
+       #         method           => $method,
+       #         uri_ref          => \$uri,
+       #         proto            => $proto,
+       #         headers          => $headers,
+       #         action           => $entry->{action},
+       #         path_info_ref    => \$path_info,
+       #         query_string_ref => \$query_string,
+       #     );
+       #     $handled = 1;
+       #     last;
+       # }
     }
     $this->returnError(404) unless $handled;
 }

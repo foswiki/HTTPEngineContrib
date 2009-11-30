@@ -20,6 +20,7 @@ sub send_response {
         my ( $write, $stdin );
         my ( $read,  $stdout );
         my ( $err,   $stderr );
+        my ( $rh,    $wh );
         unless ( pipe( $rh, $wh ) ) {
             return 501;
         }

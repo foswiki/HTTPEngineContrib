@@ -14,6 +14,7 @@ sub new {
     my $class = shift;
     my $this = bless {@_}, ref($class) || $class;
     $this->{method} = uc( $this->{method} );
+    return $this;
 }
 
 sub send_response {
@@ -88,7 +89,7 @@ sub _write {
           . $headers->as_string($CRLF)
           . $CRLF;
     }
-    if ( $code == 200 && $this->{proto} eq 'GET' ) {
+    if ( $code == 200 && $this->{method} eq 'GET' ) {
         binmode $fh;
         while ( sysread( $fh, my ($buffer), 4096 ) ) {
             last

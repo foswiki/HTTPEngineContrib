@@ -5,16 +5,16 @@ use Foswiki::Engine ();
 
 use strict;
 
-use Foswiki::Engine::HTTP::Protocol ();
-use Foswiki::Request                ();
-use Foswiki::Request::Upload        ();
-use Foswiki::Response               ();
+use Foswiki::Engine::HTTP::Server ();
+use Foswiki::Request              ();
+use Foswiki::Request::Upload      ();
+use Foswiki::Response             ();
 
 my $CRLF = "\x0D\x0A";
 
 sub run {
     my $this = shift;
-    my $http = Foswiki::Engine::HTTP::Protocol->new(
+    my $http = Foswiki::Engine::HTTP::Server->new(
         server_type        => 'Single',
         no_client_stdout   => 1,
         foswiki_engine_obj => $this,
@@ -56,25 +56,25 @@ sub preparePath {
     $req->uri( ${ $this->{args}{uri_ref} } );
 }
 
-sub prepareBody { 
+sub prepareBody {
     my ( $this, $req ) = @_;
 
     return unless $this->{args}{headers}->content_length();
-    $this->{body} = $this->{args}{http}->readBody($this->{args}{headers});
+    $this->{body} = $this->{args}{http}->readBody( $this->{args}{headers} );
 }
 
-sub prepareBodyParameters { 
+sub prepareBodyParameters {
     my ( $this, $req ) = @_;
-    
+
     return unless $this->{args}{headers}->content_length();
-    foreach my $p ($this->{body}->compat_param) {
-        $req->bodyParam($p => $this->{body}->compat_param($p));
+    foreach my $p ( $this->{body}->compat_param ) {
+        $req->bodyParam( $p => $this->{body}->compat_param($p) );
     }
 }
 
-sub prepareUploads { 
+sub prepareUploads {
     my ( $this, $req ) = @_;
-    
+
     return unless $this->{args}{headers}->content_length();
     my %uploads;
     foreach my $value ( values %{ $this->{body}->upload } ) {
@@ -86,9 +86,9 @@ sub prepareUploads {
     $req->uploads( \%uploads );
 }
 
-sub finalizeUploads { 
+sub finalizeUploads {
     my ( $this, $res, $req ) = @_;
-    
+
     $req->delete($_) foreach keys %{ $req->uploads };
     delete $this->{body};
 }

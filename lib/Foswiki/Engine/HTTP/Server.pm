@@ -1,4 +1,4 @@
-package Foswiki::Engine::HTTP::Protocol;
+package Foswiki::Engine::HTTP::Server;
 
 use Net::Server::MultiType ();
 @ISA = qw(Net::Server::MultiType);
@@ -72,6 +72,8 @@ sub options {
         $prop->{$_} ||= undef;
         $ref->{$_} = \$prop->{$_};
     }
+
+    $prop->{log_file} = '';
 }
 
 sub default_values {

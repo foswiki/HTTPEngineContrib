@@ -4,19 +4,17 @@ use Net::Server::MultiType ();
 @ISA = qw(Net::Server::MultiType);
 
 use strict;
+use Cwd                           ();
+use File::Spec                    ();
+use File::Basename                ();
 use HTTP::Message                 ();
-use HTTP::Body                    ();
 use HTTP::Status                  ();
-use IO::Select                    ();
+use Foswiki::Engine::HTTP::Util   ();
 use Foswiki::Engine::HTTP::CGI    ();
 use Foswiki::Engine::HTTP::Static ();
 use Foswiki::Engine::HTTP::Native ();
 
-use Assert;
 use Error qw(:try);
-
-use Time::HiRes qw(time);
-use Errno qw(EINTR EWOULDBLOCK EAGAIN);
 
 BEGIN {
     no warnings 'redefine';
@@ -54,7 +52,7 @@ sub options {
     foreach (
         qw(read_headers_timeout limit_request_line
         limit_headers read_body_timeout limit_body
-        puburl binurl bindir pubdir)
+        puburlpath scripturlpath scriptdir pubdir)
       )
     {
         $prop->{$_} ||= undef;
@@ -71,23 +69,43 @@ sub default_values {
     $opts->{read_body_timeout}    = 30 * 60;
     $opts->{limit_request_line}   = 8192;
     $opts->{limit_headers}        = 8192;
-    $opts->{limit_body}           = 10 * (2 ** 20);
-    $opts->{puburl}               = 
+    $opts->{limit_body}           = 10 * ( 2**20 );
+    $opts->{puburlpath}           = '/pub';
+    $opts->{scripturlpath}        = '/bin';
+    $opts->{pubdir}               = Cwd::abs_path(
+        File::Spec->catdir(
+            File::Basename::dirname( $INC{'Foswiki.pm'} ),
+            '..', 'pub'
+        )
+    );
+    $opts->{scriptdir} = Cwd::abs_path(
+        File::Spec->catdir(
+            File::Basename::dirname( $INC{'Foswiki.pm'} ),
+            '..', 'bin'
+        )
+    );
     return $opts;
 }
 
 sub process_request {
     my $this = shift;
 
-    my ( $method, $uri, $proto, $headers );
+    my ( $method, $uri_ref, $proto, $headers );
 
     try {
-        ( $method, $uri, $proto, $headers ) = $this->readHeader();
-    }
+        (
+            $method, $uri_ref, $proto, $headers,
+            $this->{foswiki}{input},
+            $this->{foswiki}{timeleft}
+          )
+          = Foswiki::Engine::HTTP::Util::readHeader( $this->{server}{client},
+            $this->{server} );
+    }    #TODO: add more error handling
     catch Error::Simple with {
         my $e = shift;
     };
 
+    #print STDERR "Debug(method, uri, proto, headers) = $method $$uri_ref $proto\n",$headers->as_string("\n");
     unless ( defined $method && $method =~ /(?:POST|GET|HEAD)/i ) {
         $this->returnError(501);
         return;
@@ -109,230 +127,88 @@ sub process_request {
     #   - Foswiki action or CGI script (without Shorter URLs)
     #   - Foswiki action as a short URL
     # Give up if none of these.
-    my $handled = 0;
+    my ( $handler, @args );
 
-    if ( index( $uri, $this->{server}{puburlpath} ) == 0 ) {
-        $this->handleStaticResponse(
+    if ( index( $$uri_ref, $this->{server}{puburlpath} ) == 0 ) {
+        $handler = 'Static';
+        @args    = (
             method  => $method,
-            uri_ref => \$uri,
+            uri_ref => $uri_ref,
             proto   => $proto,
             headers => $headers,
         );
-        $handled = 1;
     }
-    elsif ( index( $uri, $this->{server}{scripturlpath} ) == 0 )
+    elsif ( index( $$uri_ref, $this->{server}{scripturlpath} ) == 0 )
     {    # Foswiki action or CGI script
         my $path = $this->{server}{scripturlpath};
 
         my ( $script, $path_info, $query_string ) =
-          $uri     =~ m#^\Q$path\E/+([^/\?]+)([^\?]*)(?:\?(.*))?#;
-        $path_info =~ s/%(..)/chr(hex($1))/ge;
+          $$uri_ref =~ m#^\Q$path\E/+([^/\?]+)([^\?]*)(?:\?(.*))?#;
+        $path_info  =~ s/%(..)/chr(hex($1))/ge;
 
         unless ( defined $script ) {
             $this->returnError(403);
             return;    # Abort the connection
         }
 
-        if ( defined $Foswiki::cfg{SwitchBoard}{$script} ) {
-            $this->handleFoswikiAction(
+        if ( Foswiki::Engine::HTTP::Native::existsAction($script) ) {
+            $handler = 'Native';
+            @args    = (
                 method           => $method,
-                uri_ref          => \$uri,
+                uri_ref          => $uri_ref,
                 proto            => $proto,
                 headers          => $headers,
                 action           => $script,
                 path_info_ref    => \$path_info,
                 query_string_ref => \$query_string,
+                server_port      => $this->{server}{port},
             );
-            $handled = 1;
         }
         else {
-            $this->handleCgiScript(
+            $handler = 'CGI';
+            @args    = (
                 method           => $method,
-                uri_ref          => \$uri,
+                uri_ref          => $uri_ref,
                 proto            => $proto,
                 headers          => $headers,
                 script           => $script,
                 path_info_ref    => \$path_info,
                 query_string_ref => \$query_string,
             );
-            $handled = 1;
         }
     }
-    elsif ( exists $Foswiki::cfg{ScriptUrlPaths} )
+    elsif ( my @actions = Foswiki::Engine::HTTP::Native::shorterUrlPaths() )
     {    # Try shorter URLs before giving up
-       # foreach my $entry (@sorted_actions) {
-       #     next unless $uri =~ m#^\Q$entry->{path}\E(/[^\?]*)(?:\?(.*))?#;
-       #     my ( $path_info, $query_string ) = ( $1, $2 );
-       #     $path_info =~ s/%(..)/chr(hex($1))/ge;
-       #     $this->handleFoswikiAction(
-       #         method           => $method,
-       #         uri_ref          => \$uri,
-       #         proto            => $proto,
-       #         headers          => $headers,
-       #         action           => $entry->{action},
-       #         path_info_ref    => \$path_info,
-       #         query_string_ref => \$query_string,
-       #     );
-       #     $handled = 1;
-       #     last;
-       # }
-    }
-    $this->returnError(404) unless $handled;
-}
-
-sub readHeader {
-    my $this       = shift;
-    my $sel        = IO::Select->new( $this->{server}{client} );
-    my $timeleft   = $this->{server}{foswiki_read_headers_timeout};
-    my $limit      = $this->{server}{foswiki_limit_request_line};
-    my $bytes_read = 0;
-    my $data       = '';
-    my $state      = 'request';
-
-    my $headers = HTTP::Headers->new();
-    my ( $method, $uri, $proto );
-    my ( $header, $hdrval );
-
-  READ:
-    while ( $state ne 'done' && $bytes_read < $limit && $timeleft > 0 ) {
-        my $now   = time;
-        my @ready = $sel->can_read($timeleft);
-        $timeleft -= time - $now;
-        if ( @ready == 0 ) {
-            next if $! == EINTR;
-            throw Error::Simple("EBADF: $!");
-        }
-        my $rv = sysread( $this->{server}{client}, my ($buffer), $limit );
-        unless ( defined $rv ) {
-            next if $! == EINTR || $! == EAGAIN || $! == EWOULDBLOCK;
-            throw Error::Simple("EBADF: $!");
-        }
-        $bytes_read += $rv;
-        while ( $state ne 'done' && length($buffer) > 0 ) {
-            if ( $buffer =~ /(.*?)(?:\x0D?\x0A|\x0D(?!\x0A))/s ) {
-                $data .= $1;
-                substr( $buffer, 0, $+[0], '' );
-                if ( $data =~ /^\s*$/s ) {
-                    $headers->push_header( $header => $hdrval )
-                      if defined $header
-                          && defined $hdrval
-                          && $state eq 'headers';
-                    $state = 'done';
-                    $this->{foswiki}{buffer} = $buffer;
-                }
-            }
-            else {
-                $data .= $buffer;
-                next READ;
-            }
-            if ( $state eq 'request' ) {
-                ( $method, $uri, $proto ) =
-                  $data =~ /^\s*(\S+)\s+(\S+)(?:\s+(\S+))?/;
-                $state = defined $proto
-                  && $proto =~ m!HTTP/1\.[01]!i ? 'headers' : 'done';
-                $limit      = $this->{server}{foswiki_limit_headers};
-                $bytes_read = length($buffer);
-            }
-            elsif ( $state eq 'headers' ) {
-                if ( $data =~ /^([^\s:]+)\s*:\s(.*)/ ) {
-                    my @tmp = ( $1, $2 );
-                    $headers->push_header( $header => $hdrval )
-                      if defined $header && defined $hdrval;
-                    ( $header, $hdrval ) = @tmp;
-                }
-                elsif ( $data =~ /^\s+(.*)/ ) {
-                    $hdrval .= $1;
-                }
-            }
-            $data = '';
+        foreach my $entry (@actions) {
+            next unless $$uri_ref =~ m#^\Q$entry->{path}\E(/[^\?]*)(?:\?(.*))?#;
+            my ( $path_info, $query_string ) = ( $1, $2 );
+            $path_info =~ s/%(..)/chr(hex($1))/ge;
+            $handler = 'Native';
+            @args    = (
+                method           => $method,
+                uri_ref          => $uri_ref,
+                proto            => $proto,
+                headers          => $headers,
+                action           => $entry->{action},
+                path_info_ref    => \$path_info,
+                query_string_ref => \$query_string,
+            );
+            last;
         }
     }
-
-    if ( $state eq 'done' ) {
-        $this->{foswiki}{timeleft} = $timeleft;
-        return ( $method, $uri, $proto, $headers );
+    if ( defined $handler ) {
+        $handler = 'Foswiki::Engine::HTTP::' . $handler;
+        my $worker = $handler->new(@args);
+        $worker->send_response( $this->{server}{client} );
     }
-    elsif ( $timeleft <= 0 ) {
-        throw Error::Simple('ETIMEOUT');
+    else {
+        $this->returnError(404);
     }
-    elsif ( $bytes_read >= $limit ) {
-        throw Error::Simple('ESIZELIMIT');
-    }
-}
-
-sub readBody {
-    my ( $this, $headers ) = @_;
-
-    my $body = HTTP::Body->new( $headers->header('Content-Type'),
-        $headers->content_length );
-    $body->add( $this->{foswiki}{buffer} );
-    my $bytes_read = length( $this->{foswiki}{buffer} );
-    delete $this->{foswiki}{buffer};
-
-    my $timeleft =
-      $this->{server}{foswiki_read_body_timeout} + $this->{foswiki}{timeleft};
-    my $sel = IO::Select->new( $this->{server}{client} );
-
-    while ( $bytes_read < $headers->content_length && $timeleft >= 0 ) {
-        my $now   = time;
-        my @ready = $sel->can_read($timeleft);
-        $timeleft -= time - $now;
-        if ( @ready == 0 ) {
-            next if $! == EINTR;
-            throw Error::Simple("EBADF: $!");
-        }
-        my $rv = sysread( $this->{server}{client}, my ($buffer), 4096 );
-        unless ( defined $rv ) {
-            next if $! == EINTR || $! == EAGAIN || $! == EWOULDBLOCK;
-            throw Error::Simple("EBADF: $!");
-        }
-        $body->add($buffer);
-        $bytes_read += $rv;
-    }
-
-    throw Error::Simple("EBADREQ")
-      unless $bytes_read == $headers->content_length;
-
-    return $body;
 }
 
 sub returnError {
     local $, = ' ';
     print STDERR @_, "\n";
-}
-
-sub handleStaticResponse {
-    my $this = shift;
-    my $handler = Foswiki::Engine::HTTP::Static->new(@_);
-    $handler->send_response($this->{server}{client});
-}
-
-sub handleFoswikiAction {
-    my $this = shift;
-    my %args = @_;      # method, uri_ref, proto, action, headers,
-                        # path_info_ref, query_string_ref
-
-    my $engine = $this->{server}{foswiki_engine_obj};
-    $engine->{args}              = \%args;
-    $engine->{args}{server_port} = $this->{server}{port};
-    $engine->{args}{http}        = $this;
-    $engine->{client}            = $this->{server}{client};
-    my $req = $engine->prepare();
-    if ( UNIVERSAL::isa( $req, 'Foswiki::Request' ) ) {
-        my $res = Foswiki::UI::handleRequest($req);
-        $engine->finalize( $res, $req );
-    }
-    delete $engine->{args};
-    delete $engine->{client};
-}
-
-sub handleCgiScript {
-    my $this = shift;
-
-    my %args = @_;      # method, uri_ref, proto, headers, script,
-                        # path_info_ref, query_string_ref
-    my $handler = Foswiki::Engine::HTTP::CGI->new(@_);
-    $handler->send_response($this->{server}{client});
 }
 
 1;

@@ -105,7 +105,7 @@ sub process_request {
         my $e = shift;
     };
 
-    #print STDERR "Debug(method, uri, proto, headers) = $method $$uri_ref $proto\n",$headers->as_string("\n");
+#print STDERR "Debug(method, uri, proto, headers) = $method $$uri_ref $proto\n",$headers->as_string("\n");
     unless ( defined $method && $method =~ /(?:POST|GET|HEAD)/i ) {
         $this->returnError(501);
         return;
@@ -128,54 +128,40 @@ sub process_request {
     #   - Foswiki action as a short URL
     # Give up if none of these.
     my ( $handler, @args );
+    @args = (
+        method  => $method,
+        uri_ref => $uri_ref,
+        proto   => $proto,
+        headers => $headers,
+    );
 
     if ( index( $$uri_ref, $this->{server}{puburlpath} ) == 0 ) {
         $handler = 'Static';
-        @args    = (
-            method  => $method,
-            uri_ref => $uri_ref,
-            proto   => $proto,
-            headers => $headers,
-        );
     }
     elsif ( index( $$uri_ref, $this->{server}{scripturlpath} ) == 0 )
     {    # Foswiki action or CGI script
         my $path = $this->{server}{scripturlpath};
 
-        my ( $script, $path_info, $query_string ) =
+        my ( $action, $path_info, $query_string ) =
           $$uri_ref =~ m#^\Q$path\E/+([^/\?]+)([^\?]*)(?:\?(.*))?#;
         $path_info  =~ s/%(..)/chr(hex($1))/ge;
 
-        unless ( defined $script ) {
+        unless ( defined $action ) {
             $this->returnError(403);
             return;    # Abort the connection
         }
 
-        if ( Foswiki::Engine::HTTP::Native::existsAction($script) ) {
-            $handler = 'Native';
-            @args    = (
-                method           => $method,
-                uri_ref          => $uri_ref,
-                proto            => $proto,
-                headers          => $headers,
-                action           => $script,
-                path_info_ref    => \$path_info,
-                query_string_ref => \$query_string,
-                server_port      => $this->{server}{port},
-            );
-        }
-        else {
-            $handler = 'CGI';
-            @args    = (
-                method           => $method,
-                uri_ref          => $uri_ref,
-                proto            => $proto,
-                headers          => $headers,
-                script           => $script,
-                path_info_ref    => \$path_info,
-                query_string_ref => \$query_string,
-            );
-        }
+        $handler =
+          Foswiki::Engine::HTTP::Native::existsAction($action)
+          ? 'Native'
+          : 'CGI';
+        push @args,
+          (
+            action           => $action,
+            path_info_ref    => \$path_info,
+            query_string_ref => \$query_string,
+            server_port      => $this->{server}{port},
+          );
     }
     elsif ( my @actions = Foswiki::Engine::HTTP::Native::shorterUrlPaths() )
     {    # Try shorter URLs before giving up
@@ -184,21 +170,18 @@ sub process_request {
             my ( $path_info, $query_string ) = ( $1, $2 );
             $path_info =~ s/%(..)/chr(hex($1))/ge;
             $handler = 'Native';
-            @args    = (
-                method           => $method,
-                uri_ref          => $uri_ref,
-                proto            => $proto,
-                headers          => $headers,
+            push @args,
+              (
                 action           => $entry->{action},
                 path_info_ref    => \$path_info,
                 query_string_ref => \$query_string,
-            );
+                server_port      => $this->{server}{port},
+              );
             last;
         }
     }
     if ( defined $handler ) {
-        $handler = 'Foswiki::Engine::HTTP::' . $handler;
-        my $worker = $handler->new(@args);
+        my $worker = ( 'Foswiki::Engine::HTTP::' . $handler )->new(@args);
         $worker->send_response( $this->{server}{client} );
     }
     else {

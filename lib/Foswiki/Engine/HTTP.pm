@@ -48,7 +48,12 @@ sub prepareBody {
     my ( $this, $req ) = @_;
 
     return unless $this->{args}{headers}->content_length();
-    $this->{body} = $this->{args}{http}->readBody( $this->{args}{headers} );
+    $this->{body} = Foswiki::Engine::HTTP::Util::readBody(
+        $this->{args}{headers},
+        $this->{args}{input},
+        $this->{args}{timeleft}
+    );
+    delete $this->{args}{input};
 }
 
 sub prepareBodyParameters {

@@ -1,36 +1,44 @@
 package Foswiki::Engine::HTTP::Native;
 use strict;
 
-use Foswiki;
-use Foswiki::UI;
+BEGIN {
+    eval {
+        require Foswiki;
+        require Foswiki::UI;
+    };
+}
 
-my @sorted_actions = ();
-
-$Foswiki::cfg{ScriptUrlPath} =~ s{/+$}{};
-
-@sorted_actions =
-  map { { action => $_, path => $Foswiki::cfg{ScriptUrlPaths}{$_} } } sort {
-    length( $Foswiki::cfg{ScriptUrlPaths}{$b} ) <=>
-      length( $Foswiki::cfg{ScriptUrlPaths}{$a} )
-  } keys %{ $Foswiki::cfg{ScriptUrlPaths} }
-  if exists $Foswiki::cfg{ScriptUrlPaths};
+$Foswiki::cfg{ScriptUrlPath} =~ s{/+$}{}
+  if defined $Foswiki::cfg{ScriptUrlPath};
 
 sub existsAction {
+    return
+      defined $Foswiki::cfg{SwitchBoard} && $Foswiki::cfg{SwitchBoard}{ $_[0] };
 }
 
 sub shorterUrlPaths {
+    my @sorted_actions =
+      map { { action => $_, path => $Foswiki::cfg{ScriptUrlPaths}{$_} } } sort {
+        length( $Foswiki::cfg{ScriptUrlPaths}{$b} ) <=>
+          length( $Foswiki::cfg{ScriptUrlPaths}{$a} )
+      } keys %{ $Foswiki::cfg{ScriptUrlPaths} }
+      if exists $Foswiki::cfg{ScriptUrlPaths};
+
+    return @sorted_actions;
 }
 
-sub handleFoswikiAction {
-    my $this = shift;
-    my %args = @_;      # method, uri_ref, proto, action, headers,
-                        # path_info_ref, query_string_ref
+sub new {
+    my $class = shift;
+    my $this = bless {@_}, ref($class) || $class;
+    return $this;
+}
 
-    my $engine = $this->{server}{engine_obj};
-    $engine->{args}              = \%args;
-    $engine->{args}{server_port} = $this->{server}{port};
-    $engine->{args}{http}        = $this;
-    $engine->{client}            = $this->{server}{client};
+sub send_response {
+    my $this = shift;
+
+    my $engine = $Foswiki::engine;
+    $engine->{args}   = { %{$this} };
+    $engine->{client} = shift;
     my $req = $engine->prepare();
     if ( UNIVERSAL::isa( $req, 'Foswiki::Request' ) ) {
         my $res = Foswiki::UI::handleRequest($req);

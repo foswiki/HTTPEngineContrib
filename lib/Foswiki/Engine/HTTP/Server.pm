@@ -161,6 +161,9 @@ sub process_request {
             path_info_ref    => \$path_info,
             query_string_ref => \$query_string,
             server_port      => $this->{server}{port},
+            input            => $this->{foswiki}{input},
+            timeleft         => $this->{foswiki}{timeleft} +
+              $this->{server}{read_body_timeout},
           );
     }
     elsif ( my @actions = Foswiki::Engine::HTTP::Native::shorterUrlPaths() )

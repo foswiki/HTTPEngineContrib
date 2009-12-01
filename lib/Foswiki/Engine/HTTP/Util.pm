@@ -90,17 +90,14 @@ sub readHeader {
 }
 
 sub readBody {
-    my ( $this, $headers ) = @_;
+    my ( $fd, $headers, $input_ref, $timeleft ) = @_;
 
     my $body = HTTP::Body->new( $headers->header('Content-Type'),
         $headers->content_length );
-    $body->add( $this->{foswiki}{buffer} );
-    my $bytes_read = length( $this->{foswiki}{buffer} );
-    delete $this->{foswiki}{buffer};
+    $body->add( $$input_ref );
+    my $bytes_read = length( $$input_ref );
 
-    my $timeleft =
-      $this->{server}{read_body_timeout} + $this->{foswiki}{timeleft};
-    my $sel = IO::Select->new( $this->{server}{client} );
+    my $sel = IO::Select->new( $fd );
 
     while ( $bytes_read < $headers->content_length && $timeleft >= 0 ) {
         my $now   = time;
@@ -110,7 +107,7 @@ sub readBody {
             next if $! == EINTR;
             throw Error::Simple("EBADF: $!");
         }
-        my $rv = sysread( $this->{server}{client}, my ($buffer), 4096 );
+        my $rv = sysread( $fd, my ($buffer), 4096 );
         unless ( defined $rv ) {
             next if $! == EINTR || $! == EAGAIN || $! == EWOULDBLOCK;
             throw Error::Simple("EBADF: $!");

@@ -50,10 +50,9 @@ sub prepareBody {
     return unless $this->{args}{headers}->content_length();
     $this->{body} = Foswiki::Engine::HTTP::Util::readBody(
         $this->{args}{headers},
-        $this->{args}{input},
+        $this->{args}{input_ref},
         $this->{args}{timeleft}
     );
-    delete $this->{args}{input};
 }
 
 sub prepareBodyParameters {

@@ -1,8 +1,10 @@
 package Foswiki::Engine::HTTP::CGI;
 use strict;
 
-use HTTP::Headers ();
-use HTTP::Status  ();
+use File::Spec ();
+use HTTP::Headers               ();
+use HTTP::Status                ();
+use Foswiki::Engine::HTTP::Util ();
 
 sub new {
     my $class = shift;
@@ -12,27 +14,33 @@ sub new {
 sub send_response {
     my ( $this, $sock ) = @_;
 
-    if ( -e $this->{file} && !-d _ ) {
+    if (
+        -e File::Spec->catpath( $this->{scriptdir}, $this->{action},
+            $this->{scriptsuffix} )
+        && !-d _
+      )
+    {
         unless ( -x _ ) {
-            return 403;
+            Foswiki::Engine::HTTP::Util::sendResponse($sock, 403);
         }
 
         my ( $write, $stdin );
         my ( $read,  $stdout );
         my ( $err,   $stderr );
-        my ( $rh,    $wh );
-        unless ( pipe( $rh, $wh ) ) {
-            return 501;
+        unless ( pipe( $write, $stdin )
+            && pipe( $read, $stdout )
+            && pipe( $err,  $stderr ) )
+        {
+            Foswiki::Engine::HTTP::Util::sendResponse( $sock, 501 );
         }
-        
+
         my $pid = fork;
         if ( $pid > 0 ) {    # Parent process
-            foreach ($stdin, $stdout, $stderr) {
+            foreach ( $stdin, $stdout, $stderr ) {
                 close($_);
             }
-            while (sysread($read, my ($buffer), 4096)) {
-                last unless syswrite($sock, $buffer);
-            }
+            my ( $headers, $input_ref ) =
+              Foswiki::Engine::HTTP::Util::readHeader( $sock, $this->{opts} );
             wait;
         }
         elsif ( $pid == 0 ) {    # Child
@@ -47,7 +55,7 @@ sub send_response {
             }
             chdir $Foswiki::cfg{HTTPEngineContrib}{BinDir};
             %ENV = $this->hdr2env;
-            exec($this->{script}, '');
+            exec( $this->{script}, '' );
         }
         else {
             return 501;

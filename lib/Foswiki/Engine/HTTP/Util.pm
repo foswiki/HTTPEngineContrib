@@ -11,13 +11,20 @@ use Errno qw(EINTR EWOULDBLOCK EAGAIN);
 
 
 sub readHeader {
-    my ($fd, $opts) = @_;
-    my $sel        = IO::Select->new( $fd );
-    my $timeleft   = $opts->{read_headers_timeout};
-    my $limit      = $opts->{limit_request_line};
+    my ( $fd, $opts, $full ) = @_;
+    my $sel        = IO::Select->new($fd);
     my $bytes_read = 0;
     my $data       = '';
-    my $state      = 'request';
+    my $timeleft   = $opts->{read_headers_timeout};
+    my ( $state, $limit );
+    if ($full) {
+        $state = 'request';
+        $limit = $opts->{limit_request_line};
+    }
+    else {
+        $state = 'headers';
+        $limit = $opts->{limit_headers};
+    }
 
     my $headers = HTTP::Headers->new();
     my ( $method, $uri, $proto, $input );
@@ -79,7 +86,7 @@ sub readHeader {
     }
 
     if ( $state eq 'done' ) {
-        return ( $method, \$uri, $proto, $headers, \$input, $timeleft );
+        return ( $headers, \$input, $method, \$uri, $proto );
     }
     elsif ( $timeleft <= 0 ) {
         throw Error::Simple('ETIMEOUT');
@@ -120,6 +127,11 @@ sub readBody {
       unless $bytes_read == $headers->content_length;
 
     return $body;
+}
+
+sub sendResponse {
+    local $, = ' ';
+    print STDERR @_, "\n";
 }
 
 1;

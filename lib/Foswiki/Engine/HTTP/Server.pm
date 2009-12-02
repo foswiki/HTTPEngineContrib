@@ -52,7 +52,8 @@ sub options {
     foreach (
         qw(read_headers_timeout limit_request_line
         limit_headers read_body_timeout limit_body
-        puburlpath scripturlpath scriptdir pubdir)
+        puburlpath scripturlpath scriptdir pubdir
+        scriptsuffix)
       )
     {
         $prop->{$_} ||= undef;
@@ -72,6 +73,7 @@ sub default_values {
     $opts->{limit_body}           = 10 * ( 2**20 );
     $opts->{puburlpath}           = '/pub';
     $opts->{scripturlpath}        = '/bin';
+    $opts->{scriptsuffix}         = '';
     $opts->{pubdir}               = Cwd::abs_path(
         File::Spec->catdir(
             File::Basename::dirname( $INC{'Foswiki.pm'} ),
@@ -90,24 +92,19 @@ sub default_values {
 sub process_request {
     my $this = shift;
 
-    my ( $method, $uri_ref, $proto, $headers );
+    my ( $method, $uri_ref, $proto, $headers, $input_ref );
 
     try {
-        (
-            $method, $uri_ref, $proto, $headers,
-            $this->{foswiki}{input},
-            $this->{foswiki}{timeleft}
-          )
-          = Foswiki::Engine::HTTP::Util::readHeader( $this->{server}{client},
-            $this->{server} );
+        ( $headers, $input_ref, $method, $uri_ref, $proto ) =
+          Foswiki::Engine::HTTP::Util::readHeader( $this->{server}{client},
+            $this->{server}, 1 );
     }    #TODO: add more error handling
     catch Error::Simple with {
         my $e = shift;
     };
 
-#print STDERR "Debug(method, uri, proto, headers) = $method $$uri_ref $proto\n",$headers->as_string("\n");
     unless ( defined $method && $method =~ /(?:POST|GET|HEAD)/i ) {
-        $this->returnError(501);
+        Foswiki::Engine::Util::sendResponse($this->{server}{client}, 501);
         return;
     }
 
@@ -118,7 +115,7 @@ sub process_request {
         $proto = $1;
     }
     else {
-        $this->returnError(505);
+        Foswiki::Engine::Util::sendResponse($this->{server}{client}, 505);
         return;
     }
 
@@ -147,24 +144,31 @@ sub process_request {
         $path_info  =~ s/%(..)/chr(hex($1))/ge;
 
         unless ( defined $action ) {
-            $this->returnError(403);
+            Foswiki::Engine::Util::sendResponse($this->{server}{client}, 403);
             return;    # Abort the connection
         }
 
-        $handler =
-          Foswiki::Engine::HTTP::Native::existsAction($action)
-          ? 'Native'
-          : 'CGI';
         push @args,
           (
             action           => $action,
             path_info_ref    => \$path_info,
             query_string_ref => \$query_string,
             server_port      => $this->{server}{port},
-            input            => $this->{foswiki}{input},
-            timeleft         => $this->{foswiki}{timeleft} +
-              $this->{server}{read_body_timeout},
+            input_ref        => $input_ref,
+            timeleft         => $this->{server}{read_body_timeout},
           );
+        unless ( Foswiki::Engine::HTTP::Native::existsAction($action) ) {
+            $handler = 'CGI';
+            push @args,
+              (
+                scriptdir    => $this->{server}{scriptdir},
+                scriptsuffix => $this->{server}{scriptsuffix},
+                opts         => $this->{server},
+              );
+        }
+        else {
+            $handler = 'Native';
+        }
     }
     elsif ( my @actions = Foswiki::Engine::HTTP::Native::shorterUrlPaths() )
     {    # Try shorter URLs before giving up
@@ -188,13 +192,8 @@ sub process_request {
         $worker->send_response( $this->{server}{client} );
     }
     else {
-        $this->returnError(404);
+        Foswiki::Engine::Util::sendResponse($this->{server}{client}, 404);
     }
-}
-
-sub returnError {
-    local $, = ' ';
-    print STDERR @_, "\n";
 }
 
 1;

@@ -6,6 +6,8 @@ use HTTP::Headers               ();
 use HTTP::Status                ();
 use Foswiki::Engine::HTTP::Util ();
 
+*sendResponse = \&Foswiki::Engine::Util::sendResponse;
+
 sub new {
     my $class = shift;
     return bless {@_}, ref($class) || $class;
@@ -21,7 +23,7 @@ sub send_response {
       )
     {
         unless ( -x _ ) {
-            Foswiki::Engine::HTTP::Util::sendResponse($sock, 403);
+            sendResponse($sock, 403);
         }
 
         my ( $write, $stdin );
@@ -31,16 +33,31 @@ sub send_response {
             && pipe( $read, $stdout )
             && pipe( $err,  $stderr ) )
         {
-            Foswiki::Engine::HTTP::Util::sendResponse( $sock, 501 );
+            sendResponse( $sock, 501 );
         }
 
         my $pid = fork;
-        if ( $pid > 0 ) {    # Parent process
+        if ( !defined $pid ) {
+            sendResponse( $sock, 501 );
+        }
+        elsif ( $pid > 0 ) {    # Parent process
             foreach ( $stdin, $stdout, $stderr ) {
                 close($_);
             }
-            my ( $headers, $input_ref ) =
-              Foswiki::Engine::HTTP::Util::readHeader( $sock, $this->{opts} );
+            if (defined $this->{headers}->content_length) {
+                sendResponse($sock, 400) unless $this->{headers}->content_length > 0;
+                try {
+                    bridge( $sock, $write, undef,
+                        $this->{headers}{'Content-Length'},
+                        $this->{input_ref} );
+                };
+            }
+            my ( $headers, $input_ref );
+            try {
+                ( $headers, $input_ref ) =
+                  Foswiki::Engine::HTTP::Util::readHeader( $sock,
+                    $this->{opts} );
+            };
             wait;
         }
         elsif ( $pid == 0 ) {    # Child
@@ -68,6 +85,10 @@ sub send_response {
 
 sub _hdr2env {
     my $this = shift;
+}
+
+sub bridge {
+    my ($from, $to, $err) = @_;
 }
 
 1;

@@ -52,8 +52,7 @@ sub options {
     foreach (
         qw(read_headers_timeout limit_request_line
         limit_headers read_body_timeout limit_body
-        puburlpath scripturlpath scriptdir pubdir
-        scriptsuffix)
+        puburlpath scripturlpath scriptdir pubdir)
       )
     {
         $prop->{$_} ||= undef;
@@ -73,17 +72,16 @@ sub default_values {
     $opts->{limit_body}           = 10 * ( 2**20 );
     $opts->{puburlpath}           = '/pub';
     $opts->{scripturlpath}        = '/bin';
-    $opts->{scriptsuffix}         = '';
     $opts->{pubdir}               = Cwd::abs_path(
         File::Spec->catdir(
-            File::Basename::dirname( $INC{'Foswiki.pm'} ),
-            '..', 'pub'
+            File::Basename::dirname( $0 ),
+            qw(.. pub)
         )
     );
     $opts->{scriptdir} = Cwd::abs_path(
         File::Spec->catdir(
-            File::Basename::dirname( $INC{'Foswiki.pm'} ),
-            '..', 'bin'
+            File::Basename::dirname( $0 ),
+            qw(.. bin)
         )
     );
     return $opts;
@@ -104,7 +102,7 @@ sub process_request {
     };
 
     unless ( defined $method && $method =~ /(?:POST|GET|HEAD)/i ) {
-        Foswiki::Engine::Util::sendResponse($this->{server}{client}, 501);
+         Foswiki::Engine::HTTP::Util::sendResponse($this->{server}{client}, 501);
         return;
     }
 
@@ -115,7 +113,7 @@ sub process_request {
         $proto = $1;
     }
     else {
-        Foswiki::Engine::Util::sendResponse($this->{server}{client}, 505);
+        Foswiki::Engine::HTTP::Util::sendResponse($this->{server}{client}, 505);
         return;
     }
 
@@ -144,7 +142,7 @@ sub process_request {
         $path_info  =~ s/%(..)/chr(hex($1))/ge;
 
         unless ( defined $action ) {
-            Foswiki::Engine::Util::sendResponse($this->{server}{client}, 403);
+            Foswiki::Engine::HTTP::Util::sendResponse($this->{server}{client}, 403);
             return;    # Abort the connection
         }
 
@@ -153,7 +151,7 @@ sub process_request {
             action           => $action,
             path_info_ref    => \$path_info,
             query_string_ref => \$query_string,
-            server_port      => $this->{server}{port},
+            server_port      => $this->{server}{sockport},
             input_ref        => $input_ref,
             timeleft         => $this->{server}{read_body_timeout},
           );
@@ -162,7 +160,6 @@ sub process_request {
             push @args,
               (
                 scriptdir    => $this->{server}{scriptdir},
-                scriptsuffix => $this->{server}{scriptsuffix},
                 opts         => $this->{server},
               );
         }
@@ -192,7 +189,7 @@ sub process_request {
         $worker->send_response( $this->{server}{client} );
     }
     else {
-        Foswiki::Engine::Util::sendResponse($this->{server}{client}, 404);
+        Foswiki::Engine::HTTP::Util::sendResponse($this->{server}{client}, 404);
     }
 }
 

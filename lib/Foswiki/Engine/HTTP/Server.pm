@@ -91,7 +91,7 @@ sub process_request {
     my $this = shift;
 
     my ( $method, $uri_ref, $proto, $headers, $input_ref );
-
+    $SIG{PIPE} = 'IGNORE';
     try {
         ( $headers, $input_ref, $method, $uri_ref, $proto ) =
           Foswiki::Engine::HTTP::Util::readHeader( $this->{server}{client},
@@ -187,6 +187,7 @@ sub process_request {
     if ( defined $handler ) {
         my $worker = ( 'Foswiki::Engine::HTTP::' . $handler )->new(@args);
         $worker->send_response( $this->{server}{client} );
+        $worker->finish();
     }
     else {
         Foswiki::Engine::HTTP::Util::sendResponse($this->{server}{client}, 404);
